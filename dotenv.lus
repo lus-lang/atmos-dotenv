@@ -2,7 +2,8 @@
 ---
 --- `dotenv.parse` reads the text of a file. `dotenv.load` reads a file and
 --- keeps its values, which `dotenv.get` returns before it falls back to
---- `os.getenv`.
+--- `os.getenv`. With `export = true`, `dotenv.load` also sets the values as
+--- environment variables of the process and of the commands it starts.
 ---
 --- @package dotenv
 --- @version 0.1.0
@@ -11,6 +12,7 @@
 --- @repository https://github.com/lus-lang/atmos-dotenv
 --- @permission fs:read Reads the `.env` files that `dotenv.load` names.
 --- @permission env:read Reads environment variables in `dotenv.get` and in expansions.
+--- @permission env:write Sets environment variables when `dotenv.load` runs with `export`.
 
 local M = {}
 
@@ -145,6 +147,11 @@ end
 --- `load` replace values of an earlier one when `options.override` is true.
 --- Otherwise the first value of a name stays. The other options are those of
 --- `parse`. Reading the file requires `fs:read`.
+---
+--- With `options.export` true, every value also becomes an environment
+--- variable with `os.setenv`, which requires `env:write`. A variable that
+--- the environment already holds keeps its value unless `options.override`
+--- is true, so the real environment wins over the file.
 --- @param path string? The file.
 --- @param options table? The options.
 --- @return table
@@ -164,6 +171,9 @@ function M.load(path, options)
     for k, v in pairs(values) do
         if options.override or loaded[k] == nil then
             loaded[k] = v
+        end
+        if options.export and (options.override or os.getenv(k) == nil) then
+            os.setenv(k, v)
         end
     end
     return values

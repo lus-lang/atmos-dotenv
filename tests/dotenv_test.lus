@@ -70,3 +70,22 @@ local function load_and_get_test()
     assert(not catch dotenv.load(path .. ".missing", { required = true }))
     fs.remove(path)
 end
+
+local function export_test()
+    if os.setenv == nil then
+        skip("needs os.setenv")
+    end
+    pledge("env")
+    local path = os.tmpname()
+    local f <close> = io.open(path, "w")
+    f:write("DOTENV_TEST_NEW=from-file\nDOTENV_TEST_KEEP=from-file\n")
+    f:close()
+    os.setenv("DOTENV_TEST_KEEP", "from-env")
+    dotenv.reset()
+    dotenv.load(path, { export = true })
+    assert(os.getenv("DOTENV_TEST_NEW") == "from-file")
+    assert(os.getenv("DOTENV_TEST_KEEP") == "from-env")
+    dotenv.load(path, { export = true, override = true })
+    assert(os.getenv("DOTENV_TEST_KEEP") == "from-file")
+    fs.remove(path)
+end
