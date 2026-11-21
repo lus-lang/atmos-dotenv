@@ -1,0 +1,199 @@
+--- Reads `.env` files into a table.
+---
+--- `dotenv.parse` reads the text of a file. `dotenv.load` reads a file and
+--- keeps its values, which `dotenv.get` returns before it falls back to
+--- `os.getenv`.
+---
+--- @package dotenv
+--- @version 0.1.0
+--- @lus 2.0
+--- @license 0BSD
+--- @repository https://github.com/lus-lang/atmos-dotenv
+--- @permission fs:read Reads the `.env` files that `dotenv.load` names.
+--- @permission env:read Reads environment variables in `dotenv.get` and in expansions.
+
+local M = {}
+
+local loaded = {}
+
+local ESCAPES = { n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["$"] = "$" }
+
+local function lookup(name, values, env)
+    local v = values[name]
+    if v == nil then
+        v = loaded[name]
+    end
+    if v == nil and env then
+        local ok, value = catch os.getenv(name)
+        if ok then
+            v = value
+        end
+    end
+    return v
+end
+
+local function expand(text, values, env)
+    return (text:gsub("%$(%b{})", function(braced)
+        local inner = braced:sub(2, -2)
+        local name, op, default = inner:match("^([%w_]+)(:?%-)(.*)$")
+        if name == nil then
+            name = inner
+        end
+        local v = lookup(name, values, env)
+        if op == ":-" and (v == nil or v == "") then
+            return default
+        elseif op == "-" and v == nil then
+            return default
+        end
+        return v or ""
+    end):gsub("%$([%a_][%w_]*)", function(name)
+        return lookup(name, values, env) or ""
+    end))
+end
+
+--- Parses the text of a `.env` file and returns a table from names to values.
+---
+--- Each line holds `NAME=value` or `export NAME=value`. Blank lines and lines
+--- that start with `#` are skipped. An unquoted value ends at ` #` and loses
+--- surrounding spaces. A single quoted value is literal. A double quoted value
+--- may span lines and understands `\n`, `\r`, `\t`, `\"`, `\\`, and `\$`.
+--- Unquoted and double quoted values expand `$NAME`, `${NAME}`,
+--- `${NAME:-default}`, and `${NAME-default}` from earlier names of the file,
+--- then from loaded files, then from the environment when `options.env` is
+--- true. A line that is not a definition raises an error with its number.
+--- @param text string The file contents.
+--- @param options table? `expand` (default true) and `env` (default false).
+--- @return table
+function M.parse(text, options)
+    options = options or {}
+    local do_expand = options.expand ~= false
+    local env = options.env
+    local values = {}
+    local pos, line_no, len = 1, 1, #text
+    text = text:gsub("\r\n", "\n")
+    len = #text
+    while pos <= len do
+        local line_end = text:find("\n", pos, true) or len + 1
+        local line = text:sub(pos, line_end - 1)
+        local start_line = line_no
+        local next_pos = line_end + 1
+        line_no = line_no + 1
+        local body = line:match("^%s*(.-)%s*$")
+        if body ~= "" and body:sub(1, 1) ~= "#" then
+            local name, rest = body:match("^export%s+([%a_][%w_.%-]*)%s*=%s*(.*)$")
+            if name == nil then
+                name, rest = body:match("^([%a_][%w_.%-]*)%s*=%s*(.*)$")
+            end
+            if name == nil then
+                error(`.env line $start_line: expected NAME=value`, 2)
+            end
+            local value
+            local q = rest:sub(1, 1)
+            if q == "'" then
+                local close = rest:find("'", 2, true)
+                if close == nil then
+                    error(`.env line $start_line: unterminated single quote`, 2)
+                end
+                value = rest:sub(2, close - 1)
+            elseif q == '"' then
+                -- The value may continue on later lines, so search the text.
+                local start = pos + line:find('"', 1, true)
+                local i = start
+                local parts = {}
+                while true do
+                    local c = text:sub(i, i)
+                    if c == "" then
+                        error(`.env line $start_line: unterminated double quote`, 2)
+                    elseif c == "\\" then
+                        local nxt = text:sub(i + 1, i + 1)
+                        parts[#parts + 1] = ESCAPES[nxt] and (nxt == "$" and "\0DOLLAR\0" or ESCAPES[nxt]) or ("\\" .. nxt)
+                        i = i + 2
+                    elseif c == '"' then
+                        break
+                    else
+                        if c == "\n" then
+                            line_no = line_no + 1
+                        end
+                        parts[#parts + 1] = c
+                        i = i + 1
+                    end
+                end
+                value = table.concat(parts)
+                if do_expand then
+                    value = expand(value, values, env)
+                end
+                value = value:gsub("\0DOLLAR\0", "$")
+                local after = text:find("\n", i, true)
+                next_pos = (after or len) + 1
+            else
+                value = rest:gsub("%s+#.*$", ""):match("^(.-)%s*$")
+                if do_expand then
+                    value = expand(value, values, env)
+                end
+            end
+            values[name] = value
+        end
+        pos = next_pos
+    end
+    return values
+end
+
+--- Reads a `.env` file, keeps its values for `get`, and returns them.
+---
+--- `path` defaults to `".env"`. A missing file returns an empty table unless
+--- `options.required` is true, which raises an error. Values of a later
+--- `load` replace values of an earlier one when `options.override` is true.
+--- Otherwise the first value of a name stays. The other options are those of
+--- `parse`. Reading the file requires `fs:read`.
+--- @param path string? The file.
+--- @param options table? The options.
+--- @return table
+function M.load(path, options)
+    path = path or ".env"
+    options = options or {}
+    local file = io.open(path, "r")
+    if file == nil then
+        if options.required then
+            error(`cannot read '$path'`, 2)
+        end
+        return {}
+    end
+    local text = file:read("a")
+    file:close()
+    local values = M.parse(text, options)
+    for k, v in pairs(values) do
+        if options.override or loaded[k] == nil then
+            loaded[k] = v
+        end
+    end
+    return values
+end
+
+--- Returns the loaded value of `name`, or the environment variable of that
+--- name, or `default`.
+---
+--- Reading the environment requires the `env` permission. Without it, `get`
+--- returns only loaded values and `default`.
+--- @param name string The name.
+--- @param default string? The value when neither source has the name.
+--- @return string?
+function M.get(name, default)
+    local v = loaded[name]
+    if v == nil then
+        local ok, value = catch os.getenv(name)
+        if ok then
+            v = value
+        end
+    end
+    if v == nil then
+        return default
+    end
+    return v
+end
+
+--- Forgets every loaded value.
+function M.reset()
+    loaded = {}
+end
+
+return M
