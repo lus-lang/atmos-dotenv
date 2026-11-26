@@ -21,7 +21,9 @@ HASH=a#b
 end
 
 local function quotes_test()
-    local env = dotenv.parse("SINGLE='literal $HOME \\n'\nDOUBLE=\"tab\\there \\\"q\\\"\"\nMULTI=\"line one\nline two\"\nAFTER=1\n")
+    local env = dotenv.parse(
+        "SINGLE='literal $HOME \\n'\nDOUBLE=\"tab\\there \\\"q\\\"\"\nMULTI=\"line one\nline two\"\nAFTER=1\n"
+    )
     assert(env.SINGLE == "literal $HOME \\n")
     assert(env.DOUBLE == 'tab\there "q"')
     assert(env.MULTI == "line one\nline two")
@@ -66,8 +68,8 @@ local function load_and_get_test()
     assert(dotenv.load(path).TOKEN == "abc")
     assert(dotenv.get("TOKEN") == "abc")
     assert(dotenv.get("SURELY_UNSET_NAME", "d") == "d")
-    assert(next(dotenv.load(path .. ".missing")) == nil)
-    assert(not catch dotenv.load(path .. ".missing", { required = true }))
+    assert(next(dotenv.load(`$path.missing`)) == nil)
+    assert(not catch dotenv.load(`$path.missing`, { required = true }))
     fs.remove(path)
 end
 
@@ -75,6 +77,7 @@ local function export_test()
     if os.setenv == nil then
         skip("needs os.setenv")
     end
+
     pledge("env")
     local path = os.tmpname()
     local f <close> = io.open(path, "w")

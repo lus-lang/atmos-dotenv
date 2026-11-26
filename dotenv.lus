@@ -6,6 +6,16 @@
 --- `export = true`, `dotenv.load` also sets the values as environment
 --- variables of the process and of the commands it starts.
 ---
+--- The following program reads a configuration whose URL refers to the port
+--- defined before it.
+---
+--- ```lus nocheck
+--- local dotenv = require("https://atmosp.here/2.0/dotenv.lus")
+---
+--- local env = dotenv.parse("PORT=8080\nURL=http://localhost:${PORT}\n")
+--- print(env.URL)  --> http://localhost:8080
+--- ```
+---
 --- @package dotenv
 --- @version 1.0.0
 --- @lus 2.0
@@ -21,17 +31,17 @@ local loaded = {}
 
 local ESCAPES = { n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["$"] = "$" }
 
+-- Looks up a name among `values`, then among the loaded values, then among
+-- the environment variables when `env` is true.
 local function lookup(name, values, env)
-    local v = values[name]
-    if v == nil then
-        v = loaded[name]
-    end
+    local v = values?[name] or loaded[name]
+
     if v == nil and env then
-        local ok, value = catch os.getenv(name)
-        if ok then
+        if ok, value = catch os.getenv(name) then
             v = value
         end
     end
+
     return v
 end
 
@@ -39,15 +49,19 @@ local function expand(text, values, env)
     return (text:gsub("%$(%b{})", function(braced)
         local inner = braced:sub(2, -2)
         local name, op, default = inner:match("^([%w_]+)(:?%-)(.*)$")
+
         if name == nil then
             name = inner
         end
+
         local v = lookup(name, values, env)
+
         if op == ":-" and (v == nil or v == "") then
             return default
         elseif op == "-" and v == nil then
             return default
         end
+
         return v or ""
     end):gsub("%$([%a_][%w_]*)", function(name)
         return lookup(name, values, env) or ""
@@ -80,44 +94,55 @@ function M.parse(text, options)
     local do_expand = options.expand ~= false
     local env = options.env
     local values = {}
-    local pos, line_no, len = 1, 1, #text
     text = text:gsub("\r\n", "\n")
-    len = #text
+    local pos, line_no, len = 1, 1, #text
+
     while pos <= len do
         local line_end = text:find("\n", pos, true) or len + 1
         local line = text:sub(pos, line_end - 1)
         local start_line = line_no
         local next_pos = line_end + 1
         line_no = line_no + 1
-        local body = line:match("^%s*(.-)%s*$")
+        local body = line:trim()
+
         if body ~= "" and body:sub(1, 1) ~= "#" then
             local name, rest = body:match("^export%s+([%a_][%w_.%-]*)%s*=%s*(.*)$")
+
             if name == nil then
                 name, rest = body:match("^([%a_][%w_.%-]*)%s*=%s*(.*)$")
             end
+
             if name == nil then
                 error(`.env line $start_line: expected NAME=value`, 2)
             end
+
             local value
             local q = rest:sub(1, 1)
+
             if q == "'" then
                 local close = rest:find("'", 2, true)
+
                 if close == nil then
                     error(`.env line $start_line: unterminated single quote`, 2)
                 end
+
                 value = rest:sub(2, close - 1)
             elseif q == '"' then
                 -- The value may continue on later lines, so search the text.
                 local start = pos + line:find('"', 1, true)
                 local i = start
                 local parts = {}
+
                 while true do
                     local c = text:sub(i, i)
+
                     if c == "" then
                         error(`.env line $start_line: unterminated double quote`, 2)
                     elseif c == "\\" then
                         local nxt = text:sub(i + 1, i + 1)
-                        parts[#parts + 1] = ESCAPES[nxt] and (nxt == "$" and "\0DOLLAR\0" or ESCAPES[nxt]) or ("\\" .. nxt)
+                        parts[#parts + 1] = ESCAPES[nxt]
+                            and (nxt == "$" and "\0DOLLAR\0" or ESCAPES[nxt])
+                            or `\\$nxt`
                         i = i + 2
                     elseif c == '"' then
                         break
@@ -125,27 +150,35 @@ function M.parse(text, options)
                         if c == "\n" then
                             line_no = line_no + 1
                         end
+
                         parts[#parts + 1] = c
                         i = i + 1
                     end
                 end
+
                 value = table.concat(parts)
+
                 if do_expand then
                     value = expand(value, values, env)
                 end
+
                 value = value:gsub("\0DOLLAR\0", "$")
                 local after = text:find("\n", i, true)
                 next_pos = (after or len) + 1
             else
-                value = rest:gsub("%s+#.*$", ""):match("^(.-)%s*$")
+                value = rest:gsub("%s+#.*$", ""):rtrim()
+
                 if do_expand then
                     value = expand(value, values, env)
                 end
             end
+
             values[name] = value
         end
+
         pos = next_pos
     end
+
     return values
 end
 
@@ -168,24 +201,29 @@ end
 function M.load(path, options)
     path = path or ".env"
     options = options or {}
-    local file = io.open(path, "r")
+    local file <close> = io.open(path, "r")
+
     if file == nil then
         if options.required then
             error(`cannot read '$path'`, 2)
         end
+
         return {}
     end
+
     local text = file:read("a")
-    file:close()
     local values = M.parse(text, options)
+
     for k, v in pairs(values) do
         if options.override or loaded[k] == nil then
             loaded[k] = v
         end
+
         if options.export and (options.override or os.getenv(k) == nil) then
             os.setenv(k, v)
         end
     end
+
     return values
 end
 
@@ -198,17 +236,7 @@ end
 --- @param default string? The value when neither source has the name.
 --- @return string? The value of `name`, or `default`.
 function M.get(name, default)
-    local v = loaded[name]
-    if v == nil then
-        local ok, value = catch os.getenv(name)
-        if ok then
-            v = value
-        end
-    end
-    if v == nil then
-        return default
-    end
-    return v
+    return lookup(name, nil, true) or default
 end
 
 --- Clears every loaded value.

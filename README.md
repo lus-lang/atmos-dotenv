@@ -1,16 +1,9 @@
-# dotenv
+# [dotenv](https://atmosp.here/2.0/dotenv)
 
-`dotenv` reads `.env` files into a table, so a program can keep settings such as ports, URLs, and keys out of its source.
+.env files for Lus.
 
-The following example reads a configuration whose URL refers to the port defined before it.
+[Instructions for using dotenv can be found here.](https://atmosp.here/2.0/dotenv)
 
-```lus nocheck
-local dotenv = require("https://atmosp.here/2.0/dotenv.lus")
+## License
 
-local env = dotenv.parse("PORT=8080\nURL=http://localhost:${PORT}\n")
-print(env.URL)   --> http://localhost:8080
-```
-
-The package requires Lus 2.0 and declares the permissions `fs:read`, `env:read`, and `env:write`, which it uses to read `.env` files and to read and set environment variables. It never calls `pledge`, so the program that loads it keeps control of its permissions.
-
-The reference is in the doc comments of `dotenv.lus`, which `lus doc dotenv.lus` prints.
+`dotenv` is licensed under the 0-clause BSD license. It may be used for any purpose, including commercial purposes, at no cost. [For more details, consult the license here.](LICENSE)
